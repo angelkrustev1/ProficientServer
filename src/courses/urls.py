@@ -17,7 +17,6 @@ urlpatterns = [
     path("<int:pk>/edit/", CourseUpdateView.as_view(), name="course-edit"),
     path("<int:pk>/delete/", CourseDeleteView.as_view(), name="course-delete"),
 
-    # NEW:
     path("join/", CourseJoinView.as_view(), name="course-join"),
     path("<int:pk>/leave/", CourseLeaveView.as_view(), name="course-leave"),
 ]

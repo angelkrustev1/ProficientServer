@@ -1,10 +1,8 @@
-# courses/tests.py
 import re
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import TestCase
-from django.urls import reverse
 
 from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
@@ -12,7 +10,6 @@ from rest_framework.test import APITestCase, APIClient
 from .models import Course, normalize_creator_code
 from .permissions import IsCourseCreatorOrReadOnly
 from .serializers import (
-    CourseCreateSerializer,
     CourseJoinSerializer,
     CourseListSerializer,
     CourseDetailSerializer,
@@ -36,7 +33,7 @@ class CourseModelTests(TestCase):
             title="T",
             description="",
             creator=user,
-            creator_code="MA TH",  # space not allowed
+            creator_code="MA TH",
         )
         with self.assertRaises(ValidationError):
             course.full_clean()
@@ -66,16 +63,13 @@ class CourseModelTests(TestCase):
             creator_code=" math ",
         )
 
-        # normalized
         self.assertEqual(course.creator_code, "MATH")
 
-        # join_code format: CREATORCODE-XXXXXX (6 alnum)
         self.assertTrue(course.join_code.startswith("MATH-"))
         suffix = course.join_code.split("-", 1)[1]
         self.assertEqual(len(suffix), 6)
         self.assertTrue(re.fullmatch(r"[A-Z0-9]{6}", suffix) is not None)
 
-        # unique constraint should exist
         self.assertTrue(Course._meta.get_field("join_code").unique)
 
     def test_join_code_generated_only_once(self):
@@ -101,6 +95,12 @@ class CourseModelTests(TestCase):
         )
         self.assertIn("Physics", str(course))
         self.assertIn(course.join_code, str(course))
+
+    def test_image_field_exists(self):
+        field = Course._meta.get_field("image")
+        self.assertEqual(field.upload_to, "course_images/")
+        self.assertTrue(field.blank)
+        self.assertTrue(field.null)
 
 
 class CoursePermissionTests(TestCase):
@@ -140,7 +140,6 @@ class CourseSerializerTests(TestCase):
         self.creator = make_user("s_creator@example.com")
         self.member = make_user("s_member@example.com")
 
-        # creator_code must be >= 3 chars
         self.course = Course.objects.create(
             title="Algorithms",
             description="desc",
@@ -158,6 +157,10 @@ class CourseSerializerTests(TestCase):
         s = CourseListSerializer(instance=self.course)
         self.assertEqual(s.data["members_count"], 2)
 
+    def test_course_list_serializer_contains_image_field(self):
+        s = CourseListSerializer(instance=self.course)
+        self.assertIn("image", s.data)
+
     def test_course_detail_serializer_members_list(self):
         s = CourseDetailSerializer(instance=self.course)
         members = s.data["members"]
@@ -165,24 +168,16 @@ class CourseSerializerTests(TestCase):
         self.assertIn("id", members[0])
         self.assertIn("email", members[0])
 
+    def test_course_detail_serializer_contains_image_field(self):
+        s = CourseDetailSerializer(instance=self.course)
+        self.assertIn("image", s.data)
+
+
 class CourseAPITests(APITestCase):
-    """
-    Assumes your urls are something like:
-      GET    /courses/
-      GET    /courses/<id>/
-      POST   /courses/create/
-      PATCH  /courses/<id>/edit/
-      DELETE /courses/<id>/delete/
-      POST   /courses/join/
-      POST   /courses/<id>/leave/
-
-    If your URL names differ, replace the reverse(...) calls accordingly,
-    or switch to hardcoded paths.
-    """
-
     def setUp(self):
         self.creator = make_user("api_creator@example.com")
         self.other = make_user("api_other@example.com")
+        self.third = make_user("api_third@example.com")
         self.client = APIClient()
 
         self.course = Course.objects.create(
@@ -193,7 +188,14 @@ class CourseAPITests(APITestCase):
         )
         self.course.members.add(self.creator)
 
-    # ---- helpers ----
+        self.other_course = Course.objects.create(
+            title="Other Course",
+            description="",
+            creator=self.other,
+            creator_code="OTH",
+        )
+        self.other_course.members.add(self.other)
+
     def auth(self, user):
         self.client.force_authenticate(user=user)
 
@@ -207,6 +209,16 @@ class CourseAPITests(APITestCase):
         url = "/courses/"
         res = self.client.get(url)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_list_returns_only_courses_the_user_is_in(self):
+        self.auth(self.creator)
+        url = "/courses/"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        returned_ids = [course["id"] for course in res.data]
+        self.assertIn(self.course.id, returned_ids)
+        self.assertNotIn(self.other_course.id, returned_ids)
 
     def test_detail_returns_members_list(self):
         self.auth(self.creator)
@@ -223,8 +235,6 @@ class CourseAPITests(APITestCase):
         res = self.client.post(url, payload, format="json")
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
 
-        created_id = res.data.get("id")  # might not be returned depending on serializer/response
-        # Safer: query the latest course by creator/title
         course = Course.objects.get(creator=self.creator, title="New")
         self.assertTrue(course.members.filter(id=self.creator.id).exists())
 

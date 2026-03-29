@@ -17,6 +17,7 @@ def normalize_creator_code(code: str) -> str:
 class Course(models.Model):
     title = models.CharField(max_length=150)
     description = models.TextField(blank=True)
+    image = models.ImageField(upload_to="course_images/", blank=True, null=True)
 
     creator = models.ForeignKey(
         UserModel,
@@ -53,30 +54,23 @@ class Course(models.Model):
                 "creator_code": "Use only A-Z, 0-9, _ or - (no spaces)."
             })
 
-        # Optional: prevent very short codes (too easy to collide/guess)
         if len(self.creator_code) < 3:
             raise ValidationError({
                 "creator_code": "Must be at least 3 characters."
             })
 
-    # --- Join code generation ---
     @staticmethod
     def _generate_suffix(length: int = 6) -> str:
         alphabet = string.ascii_uppercase + string.digits
         return "".join(secrets.choice(alphabet) for _ in range(length))
 
     def _build_join_code(self) -> str:
-        # Example: "MATH-4K9ZQ1"
         return f"{self.creator_code}-{self._generate_suffix(6)}"
 
     def save(self, *args, **kwargs):
-        # Run validations + normalization
         self.full_clean()
 
-        # Only generate once (on create)
         if self._state.adding and not self.join_code:
-            # Handle collisions safely even under concurrency:
-            # if unique constraint fails, generate again.
             for _ in range(20):
                 self.join_code = self._build_join_code()
                 try:

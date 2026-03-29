@@ -13,6 +13,7 @@ class CourseMemberSerializer(serializers.ModelSerializer):
 
 class CourseListSerializer(serializers.ModelSerializer):
     members_count = serializers.IntegerField(source="members.count", read_only=True)
+    image = serializers.ImageField(read_only=True)
 
     class Meta:
         model = Course
@@ -20,6 +21,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "description",
+            "image",
             "creator",
             "creator_code",
             "join_code",
@@ -38,8 +40,8 @@ class CourseListSerializer(serializers.ModelSerializer):
 
 
 class CourseDetailSerializer(serializers.ModelSerializer):
-    # ✅ members as array of {id, email}
     members = CourseMemberSerializer(many=True, read_only=True)
+    image = serializers.ImageField(read_only=True)
 
     class Meta:
         model = Course
@@ -47,10 +49,11 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "description",
+            "image",
             "creator",
             "creator_code",
             "join_code",
-            "members",  # ✅ changed from members_count -> members list
+            "members",
             "created_at",
             "updated_at",
         )
@@ -65,9 +68,11 @@ class CourseDetailSerializer(serializers.ModelSerializer):
 
 
 class CourseCreateSerializer(serializers.ModelSerializer):
+    image = serializers.ImageField(required=False, allow_null=True)
+
     class Meta:
         model = Course
-        fields = ("title", "description", "creator_code")
+        fields = ("title", "description", "creator_code", "image")
 
     def create(self, validated_data):
         request = self.context["request"]
@@ -77,16 +82,16 @@ class CourseCreateSerializer(serializers.ModelSerializer):
             **validated_data
         )
 
-        # automatically join creator
         course.members.add(request.user)
-
         return course
 
 
 class CourseUpdateSerializer(serializers.ModelSerializer):
+    image = serializers.ImageField(required=False, allow_null=True)
+
     class Meta:
         model = Course
-        fields = ("title", "description", "creator_code")
+        fields = ("title", "description", "creator_code", "image")
 
 
 class CourseJoinSerializer(serializers.Serializer):
@@ -100,5 +105,4 @@ class CourseJoinSerializer(serializers.Serializer):
 
 
 class CourseLeaveSerializer(serializers.Serializer):
-    # leave by course id via URL, so body can be empty
     pass

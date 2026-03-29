@@ -2,6 +2,7 @@ from django.db import transaction
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from .models import Course
 from .serializers import (
@@ -16,11 +17,20 @@ from .permissions import IsCourseCreatorOrReadOnly
 
 class CourseListView(generics.ListAPIView):
     """
-    GET /courses/ -> all courses
+    GET /courses/ -> only courses the authenticated user is a member of
     """
-    queryset = Course.objects.select_related("creator").all().order_by("-created_at")
     serializer_class = CourseListSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        return (
+            Course.objects
+            .select_related("creator")
+            .prefetch_related("members")
+            .filter(members=self.request.user)
+            .order_by("-created_at")
+            .distinct()
+        )
 
 
 class CourseDetailView(generics.RetrieveAPIView):
@@ -39,6 +49,7 @@ class CourseCreateView(generics.CreateAPIView):
     queryset = Course.objects.all()
     serializer_class = CourseCreateSerializer
     permission_classes = (permissions.IsAuthenticated,)
+    parser_classes = (MultiPartParser, FormParser)
 
 
 class CourseUpdateView(generics.UpdateAPIView):
@@ -48,6 +59,7 @@ class CourseUpdateView(generics.UpdateAPIView):
     queryset = Course.objects.all()
     serializer_class = CourseUpdateSerializer
     permission_classes = (permissions.IsAuthenticated, IsCourseCreatorOrReadOnly)
+    parser_classes = (MultiPartParser, FormParser)
 
 
 class CourseDeleteView(generics.DestroyAPIView):
@@ -84,6 +96,7 @@ class CourseJoinView(generics.GenericAPIView):
             status=status.HTTP_200_OK,
         )
 
+
 class CourseLeaveView(APIView):
     """
     POST /courses/<id>/leave/
@@ -100,14 +113,12 @@ class CourseLeaveView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Prevent creator from leaving their own course
         if course.creator_id == request.user.id:
             return Response(
                 {"detail": "The creator cannot leave their own course."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Remove user from members
         course.members.remove(request.user)
 
         return Response(
