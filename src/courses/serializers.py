@@ -14,6 +14,7 @@ class CourseMemberSerializer(serializers.ModelSerializer):
 class CourseListSerializer(serializers.ModelSerializer):
     members_count = serializers.IntegerField(source="members.count", read_only=True)
     image = serializers.ImageField(read_only=True)
+    is_creator = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -26,6 +27,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             "creator_code",
             "join_code",
             "members_count",
+            "is_creator",
             "created_at",
             "updated_at",
         )
@@ -34,14 +36,20 @@ class CourseListSerializer(serializers.ModelSerializer):
             "creator",
             "join_code",
             "members_count",
+            "is_creator",
             "created_at",
             "updated_at",
         )
+
+    def get_is_creator(self, obj):
+        request = self.context.get("request")
+        return bool(request and request.user.is_authenticated and obj.creator_id == request.user.id)
 
 
 class CourseDetailSerializer(serializers.ModelSerializer):
     members = CourseMemberSerializer(many=True, read_only=True)
     image = serializers.ImageField(read_only=True)
+    is_creator = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -54,6 +62,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             "creator_code",
             "join_code",
             "members",
+            "is_creator",
             "created_at",
             "updated_at",
         )
@@ -62,9 +71,14 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             "creator",
             "join_code",
             "members",
+            "is_creator",
             "created_at",
             "updated_at",
         )
+
+    def get_is_creator(self, obj):
+        request = self.context.get("request")
+        return bool(request and request.user.is_authenticated and obj.creator_id == request.user.id)
 
 
 class CourseCreateSerializer(serializers.ModelSerializer):
