@@ -517,7 +517,6 @@ class AssignmentAPITests(APITestCase):
         self.assertEqual(response.data["has_submission"], False)
         self.assertIsNone(response.data["submission"])
 
-
     def test_my_submission_returns_existing_submission(self):
         submission = Submission.objects.create(
             assignment=self.assignment,
@@ -534,5 +533,6 @@ class AssignmentAPITests(APITestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["id"], submission.id)
-        self.assertEqual(len(response.data["files"]), 1)
+        self.assertEqual(response.data["has_submission"], True)
+        self.assertEqual(response.data["submission"]["id"], submission.id)
+        self.assertEqual(len(response.data["submission"]["files"]), 1)
