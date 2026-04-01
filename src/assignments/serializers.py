@@ -22,8 +22,9 @@ class AssignmentFileSerializer(serializers.ModelSerializer):
 
 class AssignmentReadSerializer(serializers.ModelSerializer):
     files = AssignmentFileSerializer(many=True, read_only=True)
-    creator = serializers.StringRelatedField()
-    course = serializers.StringRelatedField()
+    creator = serializers.StringRelatedField(read_only=True)
+    creator_email = serializers.EmailField(source="creator.email", read_only=True)
+    course = serializers.StringRelatedField(read_only=True)
 
     class Meta:
         model = Assignment
@@ -31,6 +32,7 @@ class AssignmentReadSerializer(serializers.ModelSerializer):
             "id",
             "course",
             "creator",
+            "creator_email",
             "title",
             "description",
             "files",
@@ -58,7 +60,7 @@ class AssignmentWriteSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         course_id = validated_data.pop("course_id", None)
 
-        if course_id:
+        if course_id is not None:
             instance.course_id = course_id
 
         instance.title = validated_data.get("title", instance.title)

@@ -1,5 +1,7 @@
 # materials/tests.py
 import os
+import shutil
+import tempfile
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -27,7 +29,7 @@ def make_course(creator, creator_code="MAT"):
         title="Course 1",
         description="",
         creator=creator,
-        creator_code=creator_code,  # must be >= 3
+        creator_code=creator_code,
     )
     course.members.add(creator)
     return course
@@ -43,9 +45,20 @@ def assert_stored_filename_like(testcase: TestCase, stored: str, original: str):
     testcase.assertTrue(stored.endswith(ext), f"Expected '{stored}' to end with '{ext}'")
 
 
-@override_settings(MEDIA_ROOT=os.path.join(getattr(settings, "BASE_DIR", ""), "test_media"))
-class MaterialModelTests(TestCase):
+class TempMediaMixin:
     def setUp(self):
+        super().setUp()
+        self._temp_media = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self._temp_media, ignore_errors=True)
+        super().tearDown()
+
+
+@override_settings(MEDIA_ROOT=tempfile.gettempdir())
+class MaterialModelTests(TempMediaMixin, TestCase):
+    def setUp(self):
+        super().setUp()
         self.creator = make_user("creator_m@example.com")
         self.course = make_course(self.creator, creator_code="MAT")
 
@@ -58,6 +71,7 @@ class MaterialModelTests(TestCase):
         )
         self.assertEqual(str(m), "Lecture 1 (Course 1)")
 
+    @override_settings(MEDIA_ROOT=settings.MEDIA_ROOT)
     def test_material_file_filename_property_and_str(self):
         m = Material.objects.create(
             course=self.course,
@@ -94,14 +108,14 @@ class MaterialPermissionTests(TestCase):
 
         self.DummyRequest = DummyRequest
 
-    def test_has_permission_allows_safe_methods_for_anonymous(self):
+    def test_has_permission_denies_safe_methods_for_anonymous(self):
         class Anonymous:
             is_authenticated = False
             is_staff = False
             id = None
 
         req = self.DummyRequest("GET", Anonymous())
-        self.assertTrue(self.perm.has_permission(req, None))
+        self.assertFalse(self.perm.has_permission(req, None))
 
     def test_has_permission_denies_write_for_anonymous(self):
         class Anonymous:
@@ -112,7 +126,11 @@ class MaterialPermissionTests(TestCase):
         req = self.DummyRequest("POST", Anonymous())
         self.assertFalse(self.perm.has_permission(req, None))
 
-    def test_object_permission_read_allowed(self):
+    def test_has_permission_allows_safe_methods_for_authenticated_user(self):
+        req = self.DummyRequest("GET", self.other)
+        self.assertTrue(self.perm.has_permission(req, None))
+
+    def test_object_permission_read_allowed_for_authenticated_user(self):
         req = self.DummyRequest("GET", self.other)
         self.assertTrue(self.perm.has_object_permission(req, None, self.material))
 
@@ -129,7 +147,7 @@ class MaterialPermissionTests(TestCase):
         self.assertTrue(self.perm.has_object_permission(req, None, self.material))
 
 
-@override_settings(MEDIA_ROOT=os.path.join(getattr(settings, "BASE_DIR", ""), "test_media"))
+@override_settings(MEDIA_ROOT=tempfile.gettempdir())
 class MaterialSerializerTests(TestCase):
     def setUp(self):
         self.creator = make_user("s_creator_m@example.com")
@@ -189,13 +207,8 @@ class MaterialSerializerTests(TestCase):
         self.assertEqual(len(s.data["files"]), 2)
 
 
-@override_settings(MEDIA_ROOT=os.path.join(getattr(settings, "BASE_DIR", ""), "test_media"))
+@override_settings(MEDIA_ROOT=tempfile.gettempdir())
 class MaterialAPITests(APITestCase):
-    """
-    IMPORTANT: Use reverse() so it works even if you mount under /api/.
-    Adjust these names if your materials/urls.py uses different ones.
-    """
-
     def setUp(self):
         self.client = APIClient()
         self.creator = make_user("api_mat_creator@example.com")
@@ -214,12 +227,24 @@ class MaterialAPITests(APITestCase):
     def auth(self, user):
         self.client.force_authenticate(user=user)
 
-    def test_list_allows_anonymous(self):
+    def test_list_requires_auth(self):
+        url = reverse("materials-list")
+        res = self.client.get(url)
+        self.assertIn(res.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_detail_requires_auth(self):
+        url = reverse("materials-detail", kwargs={"pk": self.material.id})
+        res = self.client.get(url)
+        self.assertIn(res.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_list_allows_authenticated_user(self):
+        self.auth(self.other)
         url = reverse("materials-list")
         res = self.client.get(url)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
 
-    def test_detail_allows_anonymous(self):
+    def test_detail_allows_authenticated_user(self):
+        self.auth(self.other)
         url = reverse("materials-detail", kwargs={"pk": self.material.id})
         res = self.client.get(url)
         self.assertEqual(res.status_code, status.HTTP_200_OK)

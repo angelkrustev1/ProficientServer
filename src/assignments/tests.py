@@ -34,7 +34,7 @@ def make_course(creator, creator_code="CRS"):
         title="Course 1",
         description="",
         creator=creator,
-        creator_code=creator_code,  # must be >= 3
+        creator_code=creator_code,
     )
     course.members.add(creator)
     return course
@@ -81,7 +81,6 @@ class AssignmentModelTests(TestCase):
         f = SimpleUploadedFile("task.pdf", b"dummy", content_type="application/pdf")
         af = AssignmentFile.objects.create(assignment=a, file=f)
 
-        # filename may be renamed by storage (task_XXXX.pdf)
         assert_stored_filename_like(self, af.filename, "task.pdf")
         self.assertIn("HW1", str(af))
 
@@ -156,14 +155,14 @@ class AssignmentPermissionTests(TestCase):
 
         self.DummyRequest = DummyRequest
 
-    def test_has_permission_allows_safe_methods_for_anonymous(self):
+    def test_has_permission_denies_safe_methods_for_anonymous(self):
         class Anonymous:
             is_authenticated = False
             is_staff = False
             id = None
 
         req = self.DummyRequest("GET", Anonymous())
-        self.assertTrue(self.perm.has_permission(req, None))
+        self.assertFalse(self.perm.has_permission(req, None))
 
     def test_has_permission_denies_write_for_anonymous(self):
         class Anonymous:
@@ -173,6 +172,10 @@ class AssignmentPermissionTests(TestCase):
 
         req = self.DummyRequest("POST", Anonymous())
         self.assertFalse(self.perm.has_permission(req, None))
+
+    def test_has_permission_allows_safe_methods_for_authenticated_user(self):
+        req = self.DummyRequest("GET", self.other)
+        self.assertTrue(self.perm.has_permission(req, None))
 
     def test_object_permission_read_allowed(self):
         req = self.DummyRequest("GET", self.other)
@@ -274,9 +277,7 @@ class AssignmentSerializerTests(TestCase):
 @override_settings(MEDIA_ROOT=os.path.join(getattr(settings, "BASE_DIR", ""), "test_media"))
 class AssignmentAPITests(APITestCase):
     """
-    IMPORTANT:
-    Uses reverse() with your URL names, so it works even if the project prefixes with /api/.
-    URL names (from your urls.py):
+    Uses reverse() with your URL names:
       - assignments-list
       - assignments-create
       - assignments-detail
@@ -304,12 +305,24 @@ class AssignmentAPITests(APITestCase):
     def auth(self, user):
         self.client.force_authenticate(user=user)
 
-    def test_list_allows_anonymous(self):
+    def test_list_requires_auth(self):
+        url = reverse("assignments-list")
+        res = self.client.get(url)
+        self.assertIn(res.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_detail_requires_auth(self):
+        url = reverse("assignments-detail", kwargs={"pk": self.assignment.id})
+        res = self.client.get(url)
+        self.assertIn(res.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_list_allows_authenticated_user(self):
+        self.auth(self.other)
         url = reverse("assignments-list")
         res = self.client.get(url)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
 
-    def test_detail_allows_anonymous(self):
+    def test_detail_allows_authenticated_user(self):
+        self.auth(self.other)
         url = reverse("assignments-detail", kwargs={"pk": self.assignment.id})
         res = self.client.get(url)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
@@ -346,7 +359,6 @@ class AssignmentAPITests(APITestCase):
 
         self.assertEqual(a.files.count(), 2)
         filenames = sorted([x.filename for x in a.files.all()])
-        # assert shape not exact (storage can rename)
         self.assertEqual(len(filenames), 2)
         self.assertTrue(filenames[0].endswith(".txt"))
         self.assertTrue(filenames[1].endswith(".txt"))

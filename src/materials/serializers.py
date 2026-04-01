@@ -24,6 +24,7 @@ class MaterialFileSerializer(serializers.ModelSerializer):
 class MaterialReadSerializer(serializers.ModelSerializer):
     files = MaterialFileSerializer(many=True, read_only=True)
     creator = serializers.StringRelatedField(read_only=True)
+    creator_email = serializers.EmailField(source="creator.email", read_only=True)
     course = serializers.StringRelatedField(read_only=True)
 
     class Meta:
@@ -32,6 +33,7 @@ class MaterialReadSerializer(serializers.ModelSerializer):
             "id",
             "course",
             "creator",
+            "creator_email",
             "title",
             "description",
             "files",
@@ -42,11 +44,6 @@ class MaterialReadSerializer(serializers.ModelSerializer):
 
 
 class MaterialWriteSerializer(serializers.ModelSerializer):
-    """
-    Used for create/update. We accept course_id.
-    We DO NOT put 'files' here for validation because multipart multi-file arrays
-    are flaky across Swagger clients; the view reads request.FILES.getlist("files") robustly.
-    """
     course_id = serializers.IntegerField(write_only=True)
 
     class Meta:

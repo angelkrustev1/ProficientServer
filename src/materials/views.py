@@ -14,10 +14,20 @@ from .serializers import MaterialReadSerializer, MaterialWriteSerializer
 class MaterialListView(generics.ListAPIView):
     """
     GET /materials/
+    Optional query params:
+      - course_id
     """
-    queryset = Material.objects.select_related("course", "creator").prefetch_related("files")
     serializer_class = MaterialReadSerializer
     permission_classes = [IsCreatorOrStaffOrReadOnly]
+
+    def get_queryset(self):
+        queryset = Material.objects.select_related("course", "creator").prefetch_related("files")
+
+        course_id = self.request.query_params.get("course_id")
+        if course_id:
+            queryset = queryset.filter(course_id=course_id)
+
+        return queryset.order_by("-created_at")
 
 
 class MaterialDetailView(generics.RetrieveAPIView):
@@ -36,7 +46,6 @@ class MaterialDetailView(generics.RetrieveAPIView):
             "course_id": drf_serializers.IntegerField(),
             "title": drf_serializers.CharField(),
             "description": drf_serializers.CharField(required=False, allow_blank=True),
-            # IMPORTANT: this makes Swagger show "Choose File" inputs
             "files": drf_serializers.ListField(
                 child=drf_serializers.FileField(),
                 required=False,
@@ -62,19 +71,16 @@ class MaterialCreateView(generics.CreateAPIView):
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        # 1) Create the material (no files in serializer)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         material = serializer.save(creator=request.user)
 
-        # 2) Attach files uploaded under key "files"
         uploaded_files = request.FILES.getlist("files")
         if uploaded_files:
             MaterialFile.objects.bulk_create(
                 [MaterialFile(material=material, file=f) for f in uploaded_files]
             )
 
-        # 3) Return full data including nested files
         material = (
             Material.objects.select_related("course", "creator")
             .prefetch_related("files")
@@ -91,7 +97,6 @@ class MaterialCreateView(generics.CreateAPIView):
             "course_id": drf_serializers.IntegerField(required=False),
             "title": drf_serializers.CharField(required=False),
             "description": drf_serializers.CharField(required=False, allow_blank=True),
-            # Optional: allow adding new files when editing (appends, does not remove old)
             "files": drf_serializers.ListField(
                 child=drf_serializers.FileField(),
                 required=False,
