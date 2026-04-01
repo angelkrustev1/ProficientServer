@@ -7,6 +7,8 @@ from .views import (
     AssignmentUpdateView,
     AssignmentDeleteView,
     SubmitAssignmentView,
+    AssignmentSubmissionListView,
+    MyAssignmentSubmissionView,
 )
 
 urlpatterns = [
@@ -20,5 +22,15 @@ urlpatterns = [
         "<int:assignment_id>/submission/",
         SubmitAssignmentView.as_view(),
         name="assignments-submit",
+    ),
+    path(
+        "<int:assignment_id>/submissions/",
+        AssignmentSubmissionListView.as_view(),
+        name="assignment-submissions-list",
+    ),
+    path(
+        "<int:assignment_id>/my-submission/",
+        MyAssignmentSubmissionView.as_view(),
+        name="assignment-my-submission",
     ),
 ]

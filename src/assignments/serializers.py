@@ -1,4 +1,3 @@
-from django.db import transaction
 from rest_framework import serializers
 
 from .models import Assignment, AssignmentFile, Submission, SubmissionFile
@@ -86,8 +85,10 @@ class SubmissionFileSerializer(serializers.ModelSerializer):
 
 
 class SubmissionReadSerializer(serializers.ModelSerializer):
-    user = serializers.StringRelatedField()
-    assignment = serializers.StringRelatedField()
+    user = serializers.StringRelatedField(read_only=True)
+    user_email = serializers.EmailField(source="user.email", read_only=True)
+    assignment = serializers.StringRelatedField(read_only=True)
+    assignment_id = serializers.IntegerField(source="assignment.id", read_only=True)
     files = SubmissionFileSerializer(many=True, read_only=True)
 
     class Meta:
@@ -95,7 +96,9 @@ class SubmissionReadSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "assignment",
+            "assignment_id",
             "user",
+            "user_email",
             "is_submitted",
             "submitted_at",
             "files",

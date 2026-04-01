@@ -1,7 +1,8 @@
 # assignments/tests.py
 import os
+import shutil
+import tempfile
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
@@ -29,22 +30,25 @@ def make_user(email="user@example.com", password="pass12345", is_staff=False):
     return User.objects.create_user(email=email, password=password, is_staff=is_staff)
 
 
-def make_course(creator, creator_code="CRS"):
+def make_assignment_base(title="Assignment 1"):
+    creator = make_user(email=f"{title.lower().replace(' ', '_')}_creator@example.com")
     course = Course.objects.create(
         title="Course 1",
         description="",
         creator=creator,
-        creator_code=creator_code,
+        creator_code="ASG",
     )
     course.members.add(creator)
-    return course
+    assignment = Assignment.objects.create(
+        course=course,
+        creator=creator,
+        title=title,
+        description="desc",
+    )
+    return creator, course, assignment
 
 
 def assert_stored_filename_like(testcase: TestCase, stored: str, original: str):
-    """
-    Your storage may rename files: 'task.pdf' -> 'task_XYZ.pdf'.
-    We only assert prefix and extension match.
-    """
     base, ext = os.path.splitext(original)
     testcase.assertTrue(
         stored.startswith(base),
@@ -56,43 +60,32 @@ def assert_stored_filename_like(testcase: TestCase, stored: str, original: str):
     )
 
 
-@override_settings(MEDIA_ROOT=os.path.join(getattr(settings, "BASE_DIR", ""), "test_media"))
+TEST_MEDIA_ROOT = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
 class AssignmentModelTests(TestCase):
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(TEST_MEDIA_ROOT, ignore_errors=True)
+
     def setUp(self):
-        self.creator = make_user("creator_a@example.com")
-        self.course = make_course(self.creator, creator_code="ASG")
+        self.creator, self.course, self.assignment = make_assignment_base("HW1")
 
     def test_assignment_str(self):
-        a = Assignment.objects.create(
-            course=self.course,
-            creator=self.creator,
-            title="HW1",
-            description="",
-        )
-        self.assertEqual(str(a), "HW1 (Course 1)")
+        self.assertEqual(str(self.assignment), "HW1 (Course 1)")
 
     def test_assignment_file_filename_property_and_str(self):
-        a = Assignment.objects.create(
-            course=self.course,
-            creator=self.creator,
-            title="HW1",
-            description="",
-        )
         f = SimpleUploadedFile("task.pdf", b"dummy", content_type="application/pdf")
-        af = AssignmentFile.objects.create(assignment=a, file=f)
+        af = AssignmentFile.objects.create(assignment=self.assignment, file=f)
 
         assert_stored_filename_like(self, af.filename, "task.pdf")
         self.assertIn("HW1", str(af))
 
     def test_submission_mark_submitted_sets_fields(self):
-        a = Assignment.objects.create(
-            course=self.course,
-            creator=self.creator,
-            title="HW1",
-            description="",
-        )
-        student = make_user("student_a@example.com")
-        sub = Submission.objects.create(assignment=a, user=student)
+        student = make_user("student_mark@example.com")
+        sub = Submission.objects.create(assignment=self.assignment, user=student)
 
         self.assertFalse(sub.is_submitted)
         self.assertIsNone(sub.submitted_at)
@@ -103,28 +96,16 @@ class AssignmentModelTests(TestCase):
         self.assertTrue(sub.is_submitted)
         self.assertIsNotNone(sub.submitted_at)
 
-    def test_unique_submission_constraint(self):
-        a = Assignment.objects.create(
-            course=self.course,
-            creator=self.creator,
-            title="HW1",
-            description="",
-        )
+    def test_submission_is_unique_per_assignment_and_user(self):
         student = make_user("student_unique@example.com")
 
-        Submission.objects.create(assignment=a, user=student)
+        Submission.objects.create(assignment=self.assignment, user=student)
         with self.assertRaises(IntegrityError):
-            Submission.objects.create(assignment=a, user=student)
+            Submission.objects.create(assignment=self.assignment, user=student)
 
     def test_submission_file_filename_and_str(self):
-        a = Assignment.objects.create(
-            course=self.course,
-            creator=self.creator,
-            title="HW1",
-            description="",
-        )
         student = make_user("student_file@example.com")
-        sub = Submission.objects.create(assignment=a, user=student)
+        sub = Submission.objects.create(assignment=self.assignment, user=student)
         f = SimpleUploadedFile("answer.txt", b"hi", content_type="text/plain")
         sf = SubmissionFile.objects.create(submission=sub, file=f)
 
@@ -134,17 +115,9 @@ class AssignmentModelTests(TestCase):
 
 class AssignmentPermissionTests(TestCase):
     def setUp(self):
-        self.creator = make_user("p_creator_a@example.com")
-        self.other = make_user("p_other_a@example.com")
-        self.staff = make_user("p_staff_a@example.com", is_staff=True)
-
-        self.course = make_course(self.creator, creator_code="PER")
-        self.assignment = Assignment.objects.create(
-            course=self.course,
-            creator=self.creator,
-            title="A1",
-            description="",
-        )
+        self.creator, self.course, self.assignment = make_assignment_base("A1")
+        self.other = make_user("other_perm@example.com")
+        self.staff = make_user("staff_perm@example.com", is_staff=True)
 
         self.perm = IsCreatorOrStaffOrReadOnly()
 
@@ -173,11 +146,11 @@ class AssignmentPermissionTests(TestCase):
         req = self.DummyRequest("POST", Anonymous())
         self.assertFalse(self.perm.has_permission(req, None))
 
-    def test_has_permission_allows_safe_methods_for_authenticated_user(self):
+    def test_has_permission_allows_authenticated_user(self):
         req = self.DummyRequest("GET", self.other)
         self.assertTrue(self.perm.has_permission(req, None))
 
-    def test_object_permission_read_allowed(self):
+    def test_object_permission_read_allowed_for_authenticated_user(self):
         req = self.DummyRequest("GET", self.other)
         self.assertTrue(self.perm.has_object_permission(req, None, self.assignment))
 
@@ -194,277 +167,372 @@ class AssignmentPermissionTests(TestCase):
         self.assertTrue(self.perm.has_object_permission(req, None, self.assignment))
 
 
-@override_settings(MEDIA_ROOT=os.path.join(getattr(settings, "BASE_DIR", ""), "test_media"))
+@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
 class AssignmentSerializerTests(TestCase):
     def setUp(self):
-        self.creator = make_user("s_creator_a@example.com")
-        self.course = make_course(self.creator, creator_code="SER")
-
-        self.assignment = Assignment.objects.create(
-            course=self.course,
-            creator=self.creator,
-            title="Lecture HW",
-            description="desc",
-        )
+        self.creator, self.course, self.assignment = make_assignment_base("Lecture HW")
 
     def test_assignment_write_serializer_validates_course_id_exists(self):
-        s = AssignmentWriteSerializer(data={"course_id": self.course.id, "title": "T", "description": ""})
-        self.assertTrue(s.is_valid(), s.errors)
+        serializer = AssignmentWriteSerializer(
+            data={"course_id": self.course.id, "title": "T", "description": ""}
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
 
-        s2 = AssignmentWriteSerializer(data={"course_id": 999999, "title": "T", "description": ""})
-        self.assertFalse(s2.is_valid())
-        self.assertIn("course_id", s2.errors)
+        serializer_invalid = AssignmentWriteSerializer(
+            data={"course_id": 999999, "title": "T", "description": ""}
+        )
+        self.assertFalse(serializer_invalid.is_valid())
+        self.assertIn("course_id", serializer_invalid.errors)
 
     def test_assignment_write_serializer_create(self):
-        s = AssignmentWriteSerializer(data={"course_id": self.course.id, "title": "New", "description": "d"})
-        self.assertTrue(s.is_valid(), s.errors)
-        obj = s.save(creator=self.creator)
+        serializer = AssignmentWriteSerializer(
+            data={"course_id": self.course.id, "title": "New", "description": "d"}
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+        obj = serializer.save(creator=self.creator)
         self.assertEqual(obj.course_id, self.course.id)
         self.assertEqual(obj.creator_id, self.creator.id)
         self.assertEqual(obj.title, "New")
 
-    def test_assignment_write_serializer_update_can_change_course(self):
-        other_course = make_course(self.creator, creator_code="S02")
-        s = AssignmentWriteSerializer(
+    def test_assignment_write_serializer_update(self):
+        other_course = Course.objects.create(
+            title="Course 2",
+            description="",
+            creator=self.creator,
+            creator_code="UPD",
+        )
+        other_course.members.add(self.creator)
+
+        serializer = AssignmentWriteSerializer(
             instance=self.assignment,
             data={"course_id": other_course.id, "title": "Updated", "description": "x"},
             partial=True,
         )
-        self.assertTrue(s.is_valid(), s.errors)
-        obj = s.save()
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        obj = serializer.save()
+
         self.assertEqual(obj.course_id, other_course.id)
         self.assertEqual(obj.title, "Updated")
 
-    def test_assignment_file_serializer_filename_and_url_without_request(self):
+    def test_assignment_file_serializer(self):
         f = SimpleUploadedFile("a.txt", b"hi", content_type="text/plain")
         af = AssignmentFile.objects.create(assignment=self.assignment, file=f)
 
-        s = AssignmentFileSerializer(instance=af, context={})
-        assert_stored_filename_like(self, s.data["filename"], "a.txt")
-        self.assertTrue(s.data["file_url"])
+        serializer = AssignmentFileSerializer(instance=af, context={})
+        assert_stored_filename_like(self, serializer.data["filename"], "a.txt")
+        self.assertTrue(serializer.data["file_url"])
 
-    def test_assignment_read_serializer_includes_nested_files(self):
-        f1 = SimpleUploadedFile("a.txt", b"hi", content_type="text/plain")
-        f2 = SimpleUploadedFile("b.txt", b"hi", content_type="text/plain")
-        AssignmentFile.objects.create(assignment=self.assignment, file=f1)
-        AssignmentFile.objects.create(assignment=self.assignment, file=f2)
+    def test_assignment_read_serializer_includes_files(self):
+        AssignmentFile.objects.create(
+            assignment=self.assignment,
+            file=SimpleUploadedFile("a.txt", b"hi", content_type="text/plain"),
+        )
+        AssignmentFile.objects.create(
+            assignment=self.assignment,
+            file=SimpleUploadedFile("b.txt", b"hi", content_type="text/plain"),
+        )
 
-        s = AssignmentReadSerializer(instance=self.assignment)
-        self.assertIn("files", s.data)
-        self.assertEqual(len(s.data["files"]), 2)
+        serializer = AssignmentReadSerializer(instance=self.assignment)
+        self.assertIn("files", serializer.data)
+        self.assertEqual(len(serializer.data["files"]), 2)
 
-    def test_submission_read_serializer_includes_nested_files(self):
-        student = make_user("student_ser@example.com")
+    def test_submission_read_serializer_includes_files(self):
+        student = make_user("student_serializer@example.com")
         sub = Submission.objects.create(assignment=self.assignment, user=student)
-        f1 = SimpleUploadedFile("ans.txt", b"hi", content_type="text/plain")
-        SubmissionFile.objects.create(submission=sub, file=f1)
+        SubmissionFile.objects.create(
+            submission=sub,
+            file=SimpleUploadedFile("ans.txt", b"hi", content_type="text/plain"),
+        )
 
-        s = SubmissionReadSerializer(instance=sub)
-        self.assertIn("files", s.data)
-        self.assertEqual(len(s.data["files"]), 1)
+        serializer = SubmissionReadSerializer(instance=sub)
+        self.assertIn("files", serializer.data)
+        self.assertEqual(len(serializer.data["files"]), 1)
 
-    def test_submission_file_serializer_filename_and_url_without_request(self):
-        student = make_user("student_ser2@example.com")
+    def test_submission_file_serializer(self):
+        student = make_user("student_serializer2@example.com")
         sub = Submission.objects.create(assignment=self.assignment, user=student)
-        f = SimpleUploadedFile("ans2.txt", b"hi", content_type="text/plain")
-        sf = SubmissionFile.objects.create(submission=sub, file=f)
+        sf = SubmissionFile.objects.create(
+            submission=sub,
+            file=SimpleUploadedFile("ans2.txt", b"hi", content_type="text/plain"),
+        )
 
-        s = SubmissionFileSerializer(instance=sf, context={})
-        assert_stored_filename_like(self, s.data["filename"], "ans2.txt")
-        self.assertTrue(s.data["file_url"])
+        serializer = SubmissionFileSerializer(instance=sf, context={})
+        assert_stored_filename_like(self, serializer.data["filename"], "ans2.txt")
+        self.assertTrue(serializer.data["file_url"])
 
 
-@override_settings(MEDIA_ROOT=os.path.join(getattr(settings, "BASE_DIR", ""), "test_media"))
+@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
 class AssignmentAPITests(APITestCase):
-    """
-    Uses reverse() with your URL names:
-      - assignments-list
-      - assignments-create
-      - assignments-detail
-      - assignments-edit
-      - assignments-delete
-      - assignments-submit
-    """
-
     def setUp(self):
         self.client = APIClient()
 
-        self.creator = make_user("api_asg_creator@example.com")
-        self.other = make_user("api_asg_other@example.com")
-        self.staff = make_user("api_asg_staff@example.com", is_staff=True)
-
-        self.course = make_course(self.creator, creator_code="API")
-
-        self.assignment = Assignment.objects.create(
-            course=self.course,
-            creator=self.creator,
-            title="Initial",
-            description="",
-        )
+        self.creator, self.course, self.assignment = make_assignment_base("Initial")
+        self.other = make_user("other_api@example.com")
+        self.second_student = make_user("second_api@example.com")
+        self.staff = make_user("staff_api@example.com", is_staff=True)
 
     def auth(self, user):
         self.client.force_authenticate(user=user)
 
-    def test_list_requires_auth(self):
+    def test_assignment_list_requires_auth(self):
         url = reverse("assignments-list")
-        res = self.client.get(url)
-        self.assertIn(res.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+        response = self.client.get(url)
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )
 
-    def test_detail_requires_auth(self):
+    def test_assignment_detail_requires_auth(self):
         url = reverse("assignments-detail", kwargs={"pk": self.assignment.id})
-        res = self.client.get(url)
-        self.assertIn(res.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+        response = self.client.get(url)
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )
 
-    def test_list_allows_authenticated_user(self):
+    def test_assignment_list_returns_data_for_authenticated_user(self):
         self.auth(self.other)
         url = reverse("assignments-list")
-        res = self.client.get(url)
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        response = self.client.get(url)
 
-    def test_detail_allows_authenticated_user(self):
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+
+    def test_assignment_detail_returns_data_for_authenticated_user(self):
         self.auth(self.other)
         url = reverse("assignments-detail", kwargs={"pk": self.assignment.id})
-        res = self.client.get(url)
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        response = self.client.get(url)
 
-    def test_create_requires_auth(self):
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.assignment.id)
+
+    def test_assignment_create_with_files(self):
+        self.auth(self.creator)
         url = reverse("assignments-create")
-        res = self.client.post(
+
+        response = self.client.post(
             url,
-            {"course_id": self.course.id, "title": "T"},
+            {
+                "course_id": str(self.course.id),
+                "title": "New Assignment",
+                "description": "desc",
+                "files": [
+                    SimpleUploadedFile("one.txt", b"1", content_type="text/plain"),
+                    SimpleUploadedFile("two.txt", b"2", content_type="text/plain"),
+                ],
+            },
             format="multipart",
         )
-        self.assertIn(res.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
-    def test_create_with_files_creates_assignment_and_files(self):
-        self.auth(self.creator)
-        url = reverse("assignments-create")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        created_assignment = Assignment.objects.get(pk=response.data["id"])
+        self.assertEqual(created_assignment.title, "New Assignment")
+        self.assertEqual(created_assignment.files.count(), 2)
+        self.assertEqual(len(response.data["files"]), 2)
 
-        f1 = SimpleUploadedFile("one.txt", b"1", content_type="text/plain")
-        f2 = SimpleUploadedFile("two.txt", b"2", content_type="text/plain")
-
-        data = {
-            "course_id": str(self.course.id),
-            "title": "New Assignment",
-            "description": "d",
-            "files": [f1, f2],
-        }
-        res = self.client.post(url, data, format="multipart")
-        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-
-        a_id = res.data["id"]
-        a = Assignment.objects.get(pk=a_id)
-        self.assertEqual(a.creator_id, self.creator.id)
-        self.assertEqual(a.course_id, self.course.id)
-
-        self.assertEqual(a.files.count(), 2)
-        filenames = sorted([x.filename for x in a.files.all()])
-        self.assertEqual(len(filenames), 2)
-        self.assertTrue(filenames[0].endswith(".txt"))
-        self.assertTrue(filenames[1].endswith(".txt"))
-
-        self.assertIn("files", res.data)
-        self.assertEqual(len(res.data["files"]), 2)
-
-    def test_update_denied_for_non_creator_non_staff(self):
+    def test_assignment_update_denied_for_non_creator_non_staff(self):
         self.auth(self.other)
         url = reverse("assignments-edit", kwargs={"pk": self.assignment.id})
-        res = self.client.patch(url, {"title": "Nope"}, format="multipart")
-        self.assertIn(res.status_code, (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND))
+        response = self.client.patch(url, {"title": "Nope"}, format="multipart")
 
-    def test_update_allowed_for_creator(self):
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND),
+        )
+
+    def test_assignment_update_allowed_for_creator(self):
         self.auth(self.creator)
         url = reverse("assignments-edit", kwargs={"pk": self.assignment.id})
-        res = self.client.patch(url, {"title": "Changed"}, format="multipart")
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        response = self.client.patch(url, {"title": "Changed"}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assignment.refresh_from_db()
         self.assertEqual(self.assignment.title, "Changed")
 
-    def test_update_allowed_for_staff(self):
+    def test_assignment_update_allowed_for_staff(self):
         self.auth(self.staff)
         url = reverse("assignments-edit", kwargs={"pk": self.assignment.id})
-        res = self.client.patch(url, {"title": "StaffChanged"}, format="multipart")
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assignment.refresh_from_db()
-        self.assertEqual(self.assignment.title, "StaffChanged")
+        response = self.client.patch(url, {"title": "Staff Changed"}, format="multipart")
 
-    def test_update_can_append_files(self):
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.title, "Staff Changed")
+
+    def test_assignment_update_can_add_files(self):
         self.auth(self.creator)
         url = reverse("assignments-edit", kwargs={"pk": self.assignment.id})
-        f1 = SimpleUploadedFile("add.txt", b"x", content_type="text/plain")
 
-        res = self.client.patch(url, {"files": [f1]}, format="multipart")
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        response = self.client.patch(
+            url,
+            {
+                "files": [
+                    SimpleUploadedFile("extra.txt", b"x", content_type="text/plain"),
+                ]
+            },
+            format="multipart",
+        )
 
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assignment.refresh_from_db()
         self.assertEqual(self.assignment.files.count(), 1)
-        self.assertTrue(self.assignment.files.first().filename.endswith(".txt"))
 
-    def test_delete_denied_for_non_creator_non_staff(self):
-        self.auth(self.other)
-        url = reverse("assignments-delete", kwargs={"pk": self.assignment.id})
-        res = self.client.delete(url)
-        self.assertIn(res.status_code, (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND))
-
-    def test_delete_allowed_for_creator(self):
+    def test_assignment_delete_allowed_for_creator(self):
         self.auth(self.creator)
         url = reverse("assignments-delete", kwargs={"pk": self.assignment.id})
-        res = self.client.delete(url)
-        self.assertIn(res.status_code, (status.HTTP_204_NO_CONTENT, status.HTTP_200_OK))
-        self.assertFalse(Assignment.objects.filter(id=self.assignment.id).exists())
+        response = self.client.delete(url)
 
-    def test_delete_allowed_for_staff(self):
-        a = Assignment.objects.create(course=self.course, creator=self.creator, title="ToDel", description="")
+        self.assertIn(response.status_code, (status.HTTP_204_NO_CONTENT, status.HTTP_200_OK))
+        self.assertFalse(Assignment.objects.filter(pk=self.assignment.id).exists())
+
+    def test_assignment_delete_allowed_for_staff(self):
         self.auth(self.staff)
-        url = reverse("assignments-delete", kwargs={"pk": a.id})
-        res = self.client.delete(url)
-        self.assertIn(res.status_code, (status.HTTP_204_NO_CONTENT, status.HTTP_200_OK))
-        self.assertFalse(Assignment.objects.filter(id=a.id).exists())
+        url = reverse("assignments-delete", kwargs={"pk": self.assignment.id})
+        response = self.client.delete(url)
 
-    def test_submit_requires_auth(self):
+        self.assertIn(response.status_code, (status.HTTP_204_NO_CONTENT, status.HTTP_200_OK))
+        self.assertFalse(Assignment.objects.filter(pk=self.assignment.id).exists())
+
+    def test_submit_assignment_requires_auth(self):
         url = reverse("assignments-submit", kwargs={"assignment_id": self.assignment.id})
-        res = self.client.post(
+        response = self.client.post(
             url,
-            {"files": [SimpleUploadedFile("ans.txt", b"hi")]},
+            {"files": [SimpleUploadedFile("ans.txt", b"hi", content_type="text/plain")]},
             format="multipart",
         )
-        self.assertIn(res.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
-    def test_submit_creates_submission_files_and_marks_submitted(self):
-        student = self.other
-        self.auth(student)
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )
 
-        url = reverse("assignments-submit", kwargs={"assignment_id": self.assignment.id})
-        f1 = SimpleUploadedFile("ans1.txt", b"hi", content_type="text/plain")
-        f2 = SimpleUploadedFile("ans2.txt", b"hi", content_type="text/plain")
-
-        res = self.client.post(url, {"files": [f1, f2]}, format="multipart")
-        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-
-        sub = Submission.objects.get(assignment=self.assignment, user=student)
-        self.assertTrue(sub.is_submitted)
-        self.assertIsNotNone(sub.submitted_at)
-        self.assertEqual(sub.files.count(), 2)
-
-        self.assertIn("files", res.data)
-        self.assertEqual(len(res.data["files"]), 2)
-
-    def test_submit_twice_returns_400(self):
-        student = self.other
-        self.auth(student)
-
+    def test_submit_assignment_creates_submission(self):
+        self.auth(self.other)
         url = reverse("assignments-submit", kwargs={"assignment_id": self.assignment.id})
 
-        res1 = self.client.post(
+        response = self.client.post(
             url,
-            {"files": [SimpleUploadedFile("ans1.txt", b"hi", content_type="text/plain")]},
+            {
+                "files": [
+                    SimpleUploadedFile("ans1.txt", b"hi", content_type="text/plain"),
+                    SimpleUploadedFile("ans2.txt", b"hello", content_type="text/plain"),
+                ]
+            },
             format="multipart",
         )
-        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
 
-        res2 = self.client.post(
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        submission = Submission.objects.get(
+            assignment=self.assignment,
+            user=self.other,
+        )
+        self.assertTrue(submission.is_submitted)
+        self.assertIsNotNone(submission.submitted_at)
+        self.assertEqual(submission.files.count(), 2)
+
+    def test_submit_assignment_without_files_returns_400(self):
+        self.auth(self.other)
+        url = reverse("assignments-submit", kwargs={"assignment_id": self.assignment.id})
+
+        response = self.client.post(url, {}, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_resubmit_assignment_overwrites_previous_files(self):
+        self.auth(self.other)
+        url = reverse("assignments-submit", kwargs={"assignment_id": self.assignment.id})
+
+        first_response = self.client.post(
             url,
-            {"files": [SimpleUploadedFile("ans2.txt", b"hi", content_type="text/plain")]},
+            {
+                "files": [
+                    SimpleUploadedFile("old1.txt", b"old1", content_type="text/plain"),
+                    SimpleUploadedFile("old2.txt", b"old2", content_type="text/plain"),
+                ]
+            },
             format="multipart",
         )
-        self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
+
+        first_submission = Submission.objects.get(
+            assignment=self.assignment,
+            user=self.other,
+        )
+        first_submission_id = first_submission.id
+        self.assertEqual(first_submission.files.count(), 2)
+
+        second_response = self.client.post(
+            url,
+            {
+                "files": [
+                    SimpleUploadedFile("new.txt", b"new", content_type="text/plain"),
+                ]
+            },
+            format="multipart",
+        )
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+
+        updated_submission = Submission.objects.get(
+            assignment=self.assignment,
+            user=self.other,
+        )
+        self.assertEqual(updated_submission.id, first_submission_id)
+        self.assertEqual(updated_submission.files.count(), 1)
+
+        stored_name = updated_submission.files.first().filename
+        assert_stored_filename_like(self, stored_name, "new.txt")
+
+        self.assertEqual(
+            Submission.objects.filter(assignment=self.assignment, user=self.other).count(),
+            1,
+        )
+
+    def test_assignment_submissions_list_returns_all_submissions(self):
+        Submission.objects.create(assignment=self.assignment, user=self.other, is_submitted=True)
+        Submission.objects.create(assignment=self.assignment, user=self.second_student, is_submitted=True)
+
+        self.auth(self.creator)
+        url = reverse("assignment-submissions-list", kwargs={"assignment_id": self.assignment.id})
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+
+    def test_assignment_submissions_list_denied_for_non_creator_non_staff(self):
+        Submission.objects.create(assignment=self.assignment, user=self.second_student, is_submitted=True)
+
+        self.auth(self.other)
+        url = reverse("assignment-submissions-list", kwargs={"assignment_id": self.assignment.id})
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_my_submission_returns_empty_response_when_missing(self):
+        self.auth(self.other)
+        url = reverse("assignment-my-submission", kwargs={"assignment_id": self.assignment.id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["has_submission"], False)
+        self.assertIsNone(response.data["submission"])
+
+
+    def test_my_submission_returns_existing_submission(self):
+        submission = Submission.objects.create(
+            assignment=self.assignment,
+            user=self.other,
+            is_submitted=True,
+        )
+        SubmissionFile.objects.create(
+            submission=submission,
+            file=SimpleUploadedFile("mine.txt", b"mine", content_type="text/plain"),
+        )
+
+        self.auth(self.other)
+        url = reverse("assignment-my-submission", kwargs={"assignment_id": self.assignment.id})
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], submission.id)
+        self.assertEqual(len(response.data["files"]), 1)
