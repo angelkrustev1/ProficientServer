@@ -120,7 +120,6 @@ class AssignmentDeleteView(generics.DestroyAPIView):
     permission_classes = [IsCreatorOrStaffOrReadOnly]
 
 
-# ✅ OVERWRITE LOGIC HERE
 @extend_schema(
     request=inline_serializer(
         name="SubmitAssignmentMultipart",
@@ -184,7 +183,6 @@ class SubmitAssignmentView(generics.GenericAPIView):
         )
 
 
-# ✅ ALL SUBMISSIONS
 class AssignmentSubmissionListView(generics.ListAPIView):
     serializer_class = SubmissionReadSerializer
     permission_classes = [IsAuthenticated]
@@ -206,7 +204,6 @@ class AssignmentSubmissionListView(generics.ListAPIView):
         )
 
 
-# ✅ FIXED RESPONSE (NO 404)
 class MyAssignmentSubmissionView(generics.GenericAPIView):
     serializer_class = SubmissionReadSerializer
     permission_classes = [IsAuthenticated]

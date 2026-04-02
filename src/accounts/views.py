@@ -2,14 +2,23 @@ from django.contrib.auth import get_user_model, authenticate
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.generics import CreateAPIView
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.serializers import UserSerializer, LoginResponseSerializer, LoginRequestSerializer, \
-    LogoutRequestSerializer, LogoutResponseSerializer
+from accounts.serializers import (
+    UserSerializer,
+    LoginResponseSerializer,
+    LoginRequestSerializer,
+    LogoutRequestSerializer,
+    LogoutResponseSerializer,
+    ChangeEmailRequestSerializer,
+    ChangeEmailResponseSerializer,
+    ChangePasswordRequestSerializer,
+    ChangePasswordResponseSerializer,
+)
 
 UserModel = get_user_model()
 
@@ -89,3 +98,64 @@ class LogoutView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+@extend_schema(
+    tags=['auth'],
+    summary='Change email',
+    description='Authenticated user changes their email by confirming their current password.',
+    request=ChangeEmailRequestSerializer,
+    responses={
+        200: ChangeEmailResponseSerializer,
+        400: 'Validation error',
+        401: 'Unauthorized',
+    }
+)
+class ChangeEmailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, *args, **kwargs):
+        serializer = ChangeEmailRequestSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        return Response(
+            {
+                'message': 'Email changed successfully.',
+                'email': user.email,
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+@extend_schema(
+    tags=['auth'],
+    summary='Change password',
+    description='Authenticated user changes their password by confirming their current password.',
+    request=ChangePasswordRequestSerializer,
+    responses={
+        200: ChangePasswordResponseSerializer,
+        400: 'Validation error',
+        401: 'Unauthorized',
+    }
+)
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = ChangePasswordRequestSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            {
+                'message': 'Password changed successfully.'
+            },
+            status=status.HTTP_200_OK
+        )

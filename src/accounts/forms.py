@@ -8,7 +8,7 @@ class AppUserCreationForm(forms.ModelForm):
 
     class Meta:
         model = AppUser
-        fields = ("email", "profile_picture")  # include if you want it on signup
+        fields = ("email", "profile_picture")
 
     def clean_email(self):
         email = self.cleaned_data.get("email")
