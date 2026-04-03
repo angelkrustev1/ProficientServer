@@ -1,3 +1,5 @@
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -7,13 +9,25 @@ from rest_framework.views import APIView
 from courses.models import Course
 from .models import Message, MessageLike
 from .permissions import IsCourseMemberOrCreator, IsMessageAuthorOrAdmin
-from .serializers import MessageSerializer, MessageCreateSerializer
+from .serializers import (
+    MessageSerializer,
+    MessageCreateSerializer,
+    serialize_message_for_socket,
+)
+
+
+def broadcast_course_chat_event(course_id, payload):
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"course_chat_{course_id}",
+        {
+            "type": "chat.event",
+            "payload": payload,
+        },
+    )
 
 
 class CourseMessageListView(generics.ListAPIView):
-    """
-    Returns all messages for a given course as an array of objects.
-    """
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated, IsCourseMemberOrCreator]
 
@@ -36,9 +50,6 @@ class CourseMessageListView(generics.ListAPIView):
 
 
 class MessageCreateView(generics.CreateAPIView):
-    """
-    Create a message in a given course.
-    """
     serializer_class = MessageCreateSerializer
     permission_classes = [IsAuthenticated, IsCourseMemberOrCreator]
 
@@ -60,14 +71,19 @@ class MessageCreateView(generics.CreateAPIView):
             message,
             context={"request": request},
         )
+
+        broadcast_course_chat_event(
+            message.course_id,
+            {
+                "type": "message_created",
+                "message": serialize_message_for_socket(message),
+            },
+        )
+
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 
 
 class MessageDeleteView(generics.DestroyAPIView):
-    """
-    Delete a message from a course.
-    Only the author/admin can delete it.
-    """
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated, IsCourseMemberOrCreator, IsMessageAuthorOrAdmin]
 
@@ -78,11 +94,25 @@ class MessageDeleteView(generics.DestroyAPIView):
         course = self.get_course()
         return Message.objects.filter(course=course).select_related("author", "course")
 
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        course_id = instance.course_id
+        message_id = instance.id
+
+        self.perform_destroy(instance)
+
+        broadcast_course_chat_event(
+            course_id,
+            {
+                "type": "message_deleted",
+                "message_id": message_id,
+            },
+        )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class MessageLikeView(APIView):
-    """
-    Like a message.
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, message_id):
@@ -94,7 +124,12 @@ class MessageLikeView(APIView):
         user = request.user
         course = message.course
 
-        if not (course.creator_id == user.id or course.members.filter(id=user.id).exists()):
+        if not (
+            user.is_staff
+            or user.has_perm("accounts.can_administer_profiles")
+            or course.creator_id == user.id
+            or course.members.filter(id=user.id).exists()
+        ):
             return Response(
                 {"detail": "You do not have access to this course."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -111,20 +146,29 @@ class MessageLikeView(APIView):
             )
 
         MessageLike.objects.create(message=message, user=user)
+        likes_count = message.likes.count()
+
+        broadcast_course_chat_event(
+            message.course_id,
+            {
+                "type": "message_reaction_updated",
+                "message_id": message.id,
+                "likes_count": likes_count,
+                "acted_by_email": user.email,
+                "liked": True,
+            },
+        )
 
         return Response(
             {
                 "detail": "Message liked successfully.",
-                "likes_count": message.likes.count(),
+                "likes_count": likes_count,
             },
             status=status.HTTP_201_CREATED,
         )
 
 
 class MessageUnlikeView(APIView):
-    """
-    Unlike a message.
-    """
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, message_id):
@@ -136,7 +180,12 @@ class MessageUnlikeView(APIView):
         user = request.user
         course = message.course
 
-        if not (course.creator_id == user.id or course.members.filter(id=user.id).exists()):
+        if not (
+            user.is_staff
+            or user.has_perm("accounts.can_administer_profiles")
+            or course.creator_id == user.id
+            or course.members.filter(id=user.id).exists()
+        ):
             return Response(
                 {"detail": "You do not have access to this course."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -154,11 +203,23 @@ class MessageUnlikeView(APIView):
             )
 
         like.delete()
+        likes_count = message.likes.count()
+
+        broadcast_course_chat_event(
+            message.course_id,
+            {
+                "type": "message_reaction_updated",
+                "message_id": message.id,
+                "likes_count": likes_count,
+                "acted_by_email": user.email,
+                "liked": False,
+            },
+        )
 
         return Response(
             {
                 "detail": "Message unliked successfully.",
-                "likes_count": message.likes.count(),
+                "likes_count": likes_count,
             },
             status=status.HTTP_200_OK,
         )

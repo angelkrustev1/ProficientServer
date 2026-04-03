@@ -55,3 +55,17 @@ class MessageCreateSerializer(serializers.ModelSerializer):
             author=request.user,
             **validated_data,
         )
+
+
+def serialize_message_for_socket(message):
+    return {
+        "id": message.id,
+        "course": message.course_id,
+        "author_id": message.author_id,
+        "author_email": message.author.email,
+        "content": message.content,
+        "created_at": message.created_at.isoformat(),
+        "updated_at": message.updated_at.isoformat(),
+        "likes_count": message.likes.count(),
+        "liked_by_me": False,
+    }
