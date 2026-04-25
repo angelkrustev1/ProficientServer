@@ -32,9 +32,6 @@ class AccountsAuthTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
         return refresh
 
-    # -----------------------------
-    # Register tests
-    # -----------------------------
     def test_register_user_success(self):
         payload = {
             'email': 'newuser@example.com',
@@ -61,9 +58,6 @@ class AccountsAuthTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(UserModel.objects.filter(email='testuser@example.com').count(), 1)
 
-    # -----------------------------
-    # Login tests
-    # -----------------------------
     def test_login_success(self):
         payload = {
             'email': 'testuser@example.com',
@@ -99,9 +93,6 @@ class AccountsAuthTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn('error', response.data)
 
-    # -----------------------------
-    # Token refresh tests
-    # -----------------------------
     def test_token_refresh_success(self):
         refresh = RefreshToken.for_user(self.user)
 
@@ -114,9 +105,6 @@ class AccountsAuthTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('access', response.data)
 
-    # -----------------------------
-    # Logout tests
-    # -----------------------------
     def test_logout_success(self):
         refresh = RefreshToken.for_user(self.user)
 
@@ -139,9 +127,6 @@ class AccountsAuthTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data['message'], 'Invalid or expired token')
 
-    # -----------------------------
-    # Change email tests
-    # -----------------------------
     def test_change_email_success(self):
         self.authenticate_client()
 
@@ -203,9 +188,7 @@ class AccountsAuthTests(APITestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.email, 'testuser@example.com')
 
-    # -----------------------------
-    # Change password tests
-    # -----------------------------
+
     def test_change_password_success(self):
         self.authenticate_client()
 
